@@ -19,19 +19,33 @@ func newBorrowCmd() *cobra.Command {
 	var offerKind, pickup, note string
 	var yes bool
 	var cancel string
+	var openBrowser bool
 	cmd := &cobra.Command{
 		Use:   "borrow",
 		Short: "Borrow media: download free scans / place physical + resource-sharing requests",
-		Long: `Borrow media for a record (by MMS-ID).
+		Long: `Borrow the best legal access path for a record (by MMS-ID).
 
-Digital media (free full text, e.g. MDZ scans via mdz-nbn-resolving.de):
-downloads the IIIF page images into --out-dir. This works anonymously for
-public-domain scans; logged-in users additionally get restricted items
-resolved for their account.
+The entitlement router decides what happens — the CLI never treats an
+arbitrary PNX link as a PDF URL:
 
-Physical media / resource sharing (requires login):
-the browser chain is fully modeled, so an agent can follow the same path
-the web UI takes (see 'request_path' in inspect --json):
+  download (free full text, anonymous OK):
+    MDZ scans (mdz-nbn-resolving.de → IIIF page images into --out-dir),
+    open repositories and direct PDFs. Free downloads need no --yes.
+
+  electronic-licensed (Alma-E/Viewit, login improves the check):
+    the edelivery endpoint is the authoritative source for hasAccess.
+    Depending on the winning offer 'borrow' either
+      - open-browser: licensed for you → prints the resolver URL
+        (publisher SSO happens in the browser; with --open the browser
+        is launched directly),
+      - search-in-portal: portal/collection page, not the title → prints
+        the portal URL to search inside,
+      - request-physical: licensed but no access → falls through to the
+        physical / resource-sharing chain below.
+
+  physical media / resource sharing (requires login):
+    the browser chain is fully modeled (see 'request_path' in
+    inspect --json):
 
   ovp (local Alma loan, serviceMode=ovp / category Alma-P):
     1. getPhysicalService → physical_service_id (svcId)
@@ -69,7 +83,11 @@ Examples:
   librarian borrow --mms 991144111495607356 --yes --pickup 13725028710007356
 
   # download free MDZ scan (first 5 pages to check):
-  librarian borrow --mms 991032822189707356 --out-dir ./faust --max-pages 5`,
+  librarian borrow --mms 991032822189707356 --out-dir ./faust --max-pages 5
+
+  # licensed e-book (entitled): show the resolver URL, or open it:
+  librarian borrow --mms 991146664888507356 --json
+  librarian borrow --mms 991146664888507356 --open`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// --- cancel path (needs no MMS lookup) ---
 			if cancel != "" {
@@ -114,17 +132,16 @@ Examples:
 			if err != nil {
 				return err
 			}
-			online := doc.OnlineLinks()
-			var free, mdz []bsb.DeliveryLink
-			for _, l := range online {
-				if bsb.IsMDZLink(l.LinkURL) {
-					mdz = append(mdz, l)
-				} else if bsb.IsFreeFulltext(l) {
-					free = append(free, l)
-				}
-			}
 
-			res := bsb.BorrowResult{MMS: doc.MMS(), Title: doc.Title(), DryRun: dryRun || !yes}
+			// --- entitlement router: classify PNX links + edelivery access ---
+			offers, edErr := bsb.ResolveElectronic(client, doc)
+			route := bsb.BestElectronicRoute(offers)
+
+			res := bsb.BorrowResult{MMS: doc.MMS(), Title: doc.Title(), DryRun: dryRun || !yes,
+				Electronic: offers, Route: route, ElectronicError: edErr}
+			if route != nil {
+				res.Action = route.Action
+			}
 
 			// --- readonly best-offer probe (ngrs) ---
 			if offerKind != "" {
@@ -140,15 +157,39 @@ Examples:
 				return nil
 			}
 
+			// --- routed electronic actions (no --yes needed: nothing state-changing) ---
+			if route != nil {
+				switch route.Action {
+				case bsb.ActionDownload:
+					// handled below (MDZ / direct download)
+				case bsb.ActionOpenBrowser:
+					if err := emitOpenBrowser(doc, res, route, edErr, openBrowser); err != nil {
+						return err
+					}
+					return nil
+				case bsb.ActionSearchInPortal:
+					if err := emitSearchInPortal(doc, res, route, edErr); err != nil {
+						return err
+					}
+					return nil
+				case bsb.ActionRequestPhysical:
+					// licensed, but no access for this user: print the
+					// entitlement and fall through to the physical chain.
+					printDeniedElectronic(doc, res, route, loggedIn)
+				}
+			}
+
 			// --- physical / resource-sharing request chain (login required) ---
 			// Without --yes this is strictly readonly (preview = --dry-run).
-			// NOTE: the chain is only reachable when there is no free digital
-			// copy — records with an MDZ/free link download instead.
-			if len(mdz) == 0 && len(free) == 0 {
+			// Reachable for records without online offers (route == nil) and for
+			// licensed-but-denied records via the request-physical fallback.
+			// Download routes skip the chain entirely (free downloads need no
+			// login); browser/portal routes already returned above.
+			if route == nil || route.Action == bsb.ActionRequestPhysical {
 				chain, err := bsb.AssembleRequestChain(client, doc, pickup, note, flagLang)
 				if err != nil {
 					if flagJSON {
-						return printJSON(map[string]any{"mms": doc.MMS(), "mode": "request", "dry_run": true, "error": err.Error()})
+						return printJSON(newRequestErrorJSON(doc, res, chainPathOf(doc), err))
 					}
 					return err
 				}
@@ -183,7 +224,23 @@ Examples:
 				return nil
 			}
 
-			// --- real download: MDZ first (free downloads need no --yes) ---
+			// --- real download: only the router's open links download ---
+			var mdz, free []bsb.DeliveryLink
+			if route != nil && route.Action == bsb.ActionDownload {
+				// The winning offer decides: best-effort download of every open
+				// link (MDZ via IIIF, the rest direct). Portal/aggregator links
+				// never reach this branch — ClassifyLink keeps them out.
+				for _, l := range doc.OnlineLinks() {
+					if bsb.ClassifyLink(l) != bsb.KindOpen {
+						continue
+					}
+					if bsb.IsMDZLink(l.LinkURL) {
+						mdz = append(mdz, l)
+					} else {
+						free = append(free, l)
+					}
+				}
+			}
 			if len(mdz) > 0 {
 				objID, err := bsb.ResolveMDZ(client.HTTP, mdz[0].LinkURL)
 				if err != nil {
@@ -242,7 +299,11 @@ Examples:
 
 			// --- no digital copy fallback (chain path above handles requests) ---
 			res.Mode = "request-info"
-			res.Message = "no free digital copy available; physical request required"
+			if route != nil && len(offers) == 0 {
+				res.Message = "no online links and no physical request path"
+			} else {
+				res.Message = "no free digital copy available; physical request required"
+			}
 			if flagJSON {
 				if detail {
 					res.Detail = requestDetail(doc, client, loggedIn)
@@ -264,7 +325,89 @@ Examples:
 	cmd.Flags().StringVar(&cancel, "cancel", "", "cancel an open request by id (needs --yes to confirm; no --mms needed)")
 	cmd.Flags().IntVar(&maxPages, "max-pages", 0, "max IIIF pages to download (0 = all; useful for checks)")
 	cmd.Flags().BoolVar(&detail, "detail", false, "resolve per-service holdings detail (summaries, copy statements) for physical requests (login required)")
+	cmd.Flags().BoolVar(&openBrowser, "open", false, "open the licensed resolver URL in the browser (for open-browser routes; default prints the URL only)")
 	return cmd
+}
+
+// emitOpenBrowser reports a licensed, entitled offer. The CLI never speaks
+// publisher SSO — the resolver URL is printed (JSON: electronic_route) and
+// only launched with explicit --open.
+func emitOpenBrowser(doc *bsb.Doc, res bsb.BorrowResult, route *bsb.ElectronicOffer, edErr string, launch bool) error {
+	res.Mode = "open-browser"
+	res.DryRun = !launch
+	target := route.ResolverURL
+	if target == "" {
+		target = route.DirectURL
+	}
+	res.Message = fmt.Sprintf("licensed access via %s — publisher SSO happens in the browser: %s", route.Platform, target)
+	if flagJSON {
+		return printJSON(res)
+	}
+	fmt.Println(res.Message)
+	if edErr != "" {
+		fmt.Fprintf(os.Stderr, "(entitlement check incomplete: %s)\n", edErr)
+	}
+	fmt.Printf("Record: %s (MMS %s)\n", doc.Title(), doc.MMS())
+	if launch {
+		if err := openURL(target); err != nil {
+			return err
+		}
+		fmt.Println("Opened in browser.")
+		return nil
+	}
+	fmt.Println("Re-run with --open to launch the browser, or open the URL above manually.")
+	return nil
+}
+
+// emitSearchInPortal reports a package-portal offer: the PNX link is a
+// collection/database page, not the title. No download is attempted.
+func emitSearchInPortal(doc *bsb.Doc, res bsb.BorrowResult, route *bsb.ElectronicOffer, edErr string) error {
+	res.Mode = "search-in-portal"
+	res.DryRun = true
+	res.Message = fmt.Sprintf("no direct title link — search %q inside %s: %s", doc.Title(), route.Platform, route.DirectURL)
+	if flagJSON {
+		return printJSON(res)
+	}
+	fmt.Println(res.Message)
+	if edErr != "" {
+		fmt.Fprintf(os.Stderr, "(entitlement check incomplete: %s)\n", edErr)
+	}
+	fmt.Printf("Record: %s (MMS %s)\n", doc.Title(), doc.MMS())
+	if route.Reason != "" {
+		fmt.Printf("(%s)\n", route.Reason)
+	}
+	return nil
+}
+
+// printDeniedElectronic informs about licensed-but-denied offers before the
+// physical chain preview takes over.
+func printDeniedElectronic(doc *bsb.Doc, res bsb.BorrowResult, route *bsb.ElectronicOffer, loggedIn bool) {
+	if flagJSON {
+		return // the JSON error envelope carries action + electronic offers
+	}
+	fmt.Printf("Licensed electronic access denied (package: %s).\n", route.Platform)
+	if !loggedIn {
+		fmt.Println("Hint: `librarian auth login` may unlock entitlements — the check above ran anonymously.")
+	}
+	fmt.Println("Falling back to the physical / resource-sharing chain:")
+}
+
+// newRequestErrorJSON builds the machine-readable error envelope for a
+// failed request-chain assembly: route action, entitlement offers and the
+// request path stay visible so agents can react (e.g. login, then retry).
+func newRequestErrorJSON(doc *bsb.Doc, res bsb.BorrowResult, requestPath string, err error) map[string]any {
+	return map[string]any{
+		"mms": doc.MMS(), "title": doc.Title(),
+		"mode": "request", "dry_run": true,
+		"action": res.Action, "electronic": res.Electronic,
+		"electronic_route": res.Route, "request_path": requestPath,
+		"error": err.Error(),
+	}
+}
+
+// chainPathOf classifies the record without running the (login-gated) chain.
+func chainPathOf(doc *bsb.Doc) string {
+	return bsb.RequestPath(doc)
 }
 
 func printRequestHint(doc *bsb.Doc, client *bsb.Client, loggedIn, detail bool) {

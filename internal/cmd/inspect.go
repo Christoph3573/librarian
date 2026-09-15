@@ -107,6 +107,14 @@ Examples:
 					"request_path":        bsb.RequestPath(doc),
 					"logged_in":           loggedIn,
 				}
+				electronic, edErr := bsb.ResolveElectronic(client, doc)
+				out["electronic"] = electronic
+				if route := bsb.BestElectronicRoute(electronic); route != nil {
+					out["electronic_route"] = route
+				}
+				if edErr != "" {
+					out["electronic_error"] = edErr
+				}
 				if detailSvc != nil {
 					out["detail"] = detailSvc
 				}
@@ -134,6 +142,7 @@ Examples:
 			}
 			printHoldings(doc)
 			printOnline(doc)
+			printElectronic(client, doc)
 			if services != nil {
 				fmt.Printf("\nRequest options (logged in):\n")
 				for _, s := range services.Services {
@@ -187,6 +196,40 @@ func printOnline(doc *bsb.Doc) {
 	}
 	for _, l := range links {
 		fmt.Printf("  digital: [%s] %s\n           %s\n", l.LinkType, l.DisplayLabel, l.LinkURL)
+	}
+}
+
+// printElectronic renders the entitlement-router offers: classified PNX
+// links plus authoritative edelivery access flags (Alma-E records).
+func printElectronic(client *bsb.Client, doc *bsb.Doc) {
+	offers, edErr := bsb.ResolveElectronic(client, doc)
+	if len(offers) == 0 {
+		return
+	}
+	fmt.Printf("\nElectronic access (best legal route first):\n")
+	for _, o := range offers {
+		access := ""
+		if o.HasAccess != nil {
+			access = fmt.Sprintf(" access=%v", *o.HasAccess)
+		}
+		target := o.DirectURL
+		if o.ResolverURL != "" {
+			target = o.ResolverURL
+		}
+		fmt.Printf("  - %s [%s]%s action=%s\n    %s\n", o.Platform, o.Kind, access, o.Action, target)
+		if o.Reason != "" {
+			fmt.Printf("    (%s)\n", o.Reason)
+		}
+	}
+	if route := bsb.BestElectronicRoute(offers); route != nil {
+		target := route.DirectURL
+		if route.ResolverURL != "" {
+			target = route.ResolverURL
+		}
+		fmt.Printf("  best route: %s → %s\n", route.Action, target)
+	}
+	if edErr != "" {
+		fmt.Printf("  (entitlement check failed: %s — PNX classification only)\n", edErr)
 	}
 }
 
