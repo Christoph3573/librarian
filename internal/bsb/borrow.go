@@ -19,10 +19,21 @@ import (
 type BorrowResult struct {
 	MMS     string   `json:"mms"`
 	Title   string   `json:"title"`
-	Mode    string   `json:"mode"` // "download" | "request-info"
+	Mode    string   `json:"mode"` // "download" | "request" | "open-browser" | "search-in-portal" | "request-info" | "offer" | "cancel"
 	DryRun  bool     `json:"dry_run"`
 	Message string   `json:"message"`
 	Files   []string `json:"files,omitempty"`
+	// Action is the entitlement-router action taken (download | open-browser |
+	// search-in-portal | request-physical | none).
+	Action string `json:"action,omitempty"`
+	// Electronic holds the classified offers (PNX links + edelivery
+	// entitlement) the routing decision was based on.
+	Electronic []ElectronicOffer `json:"electronic,omitempty"`
+	// Route is the chosen best legal access path (nil when none actionable).
+	Route *ElectronicOffer `json:"electronic_route,omitempty"`
+	// ElectronicError is set when the edelivery entitlement check failed;
+	// routing then fell back to PNX classification only.
+	ElectronicError string `json:"electronic_error,omitempty"`
 	// Detail holds the titleServices (+ svcId detail) output for
 	// physical requests when --detail was given.
 	Detail *TitleServices `json:"detail,omitempty"`
@@ -153,7 +164,9 @@ func IsMDZLink(raw string) bool {
 	return strings.Contains(raw, "mdz-nbn-resolving.de")
 }
 
-// IsFreeFulltext heuristically detects free full-text links.
+// IsFreeFulltext is deprecated: the display label ("Volltext") also labels
+// portal/collection pages, so label sniffing produced false-positive
+// downloads. Use ClassifyLink (KindOpen) via the entitlement router instead.
 func IsFreeFulltext(l DeliveryLink) bool {
 	if l.LinkType == "linktorsrc" {
 		return true

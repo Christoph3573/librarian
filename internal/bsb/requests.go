@@ -388,7 +388,8 @@ func (c *Client) BestOffer(kind string, params url.Values) (map[string]any, erro
 // record, so agents know which chain to follow. It mirrors the bundle.js
 // decision: serviceMode "ovp" → local Alma request chain (titleServices /
 // itemServices, see HoldingsItems/RequestForm/SubmitRequest); Rapido/NGRS
-// best-offer chain for resource-sharing; "Viewit"/electronic otherwise.
+// best-offer chain for resource-sharing; electronic records distinguish open
+// (freely downloadable) from licensed (entitlement router decides).
 func RequestPath(doc *Doc) string {
 	for _, m := range doc.Delivery.ServiceMode {
 		if m == "ovp" {
@@ -400,7 +401,10 @@ func RequestPath(doc *Doc) string {
 			return "ovp: local Alma request — getPhysicalService → titleServices → holdings items → itemServices form → POST submit"
 		}
 		if c == "Alma-E" || c == "Alma-D" {
-			return "electronic: edelivery/viewit services, no physical loan"
+			if HasOpenLink(doc) {
+				return "electronic-open: free full text — borrow downloads the best open link"
+			}
+			return "electronic-licensed: check `electronic` offers in inspect --json (entitlement router: open-browser | search-in-portal | request-physical)"
 		}
 		if c == "Remote Search Resource" {
 			return "ngrs: resource sharing — bestoffer/physical → borrowingrequest"
