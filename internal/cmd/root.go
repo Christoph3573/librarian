@@ -26,7 +26,9 @@ https://opacplus.bsb-muenchen.de and helps AI agents (and humans) find books,
 inspect their formats and availability, and borrow/download digital media.
 
 Workflow for agents:
-  1. librarian auth --help        # log in (or stay anonymous for search)
+  1. librarian auth --help        # log in first: unlocks entitlements (hasAccess),
+                                  # request options and ordering; search works anonymously
+                                  # but e-license checks underestimate access
   2. librarian research --help    # search for books
   3. librarian inspect --help     # formats + availability of one record
   4. librarian borrow --help      # request physical media / download digital media

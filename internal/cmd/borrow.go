@@ -34,7 +34,10 @@ arbitrary PNX link as a PDF URL:
 
   electronic-licensed (Alma-E/Viewit, login improves the check):
     the edelivery endpoint is the authoritative source for hasAccess.
-    Depending on the winning offer 'borrow' either
+    For Alma-E records check 'auth status --json' FIRST: if anonymous
+    and the route is request-physical, run 'auth login' and retry —
+    the anonymous check underestimates access. Depending on the
+    winning offer 'borrow' either
       - open-browser: licensed for you → prints the resolver URL
         (publisher SSO happens in the browser; with --open the browser
         is launched directly),
@@ -68,9 +71,12 @@ and never POSTs a request. A real request needs BOTH login AND --yes:
   borrow --mms <id> --offer physical     # readonly best-offer preview (ngrs)
   borrow --cancel <request-id> --yes     # cancel an open request
 
-AGENT HINT: run 'librarian borrow --help' first. Get the MMS-ID from
-'librarian research --json' and check 'librarian inspect --mms <id> --json'
-(request_path, physical_service_id) before borrowing. Prefer --json.
+  AGENT HINT: run 'librarian borrow --help' first. Get the MMS-ID from
+  'librarian research --json' and check 'librarian inspect --mms <id> --json'
+  (request_path, physical_service_id) before borrowing. Prefer --json.
+  For Alma-E: if not logged in ('logged_in': false in inspect) and the
+  route is request-physical, 'borrow' stops and demands login first —
+  retry after 'auth login' before ordering anything physically.
 
 Examples:
   # preview what would happen (no download, no request):
@@ -138,9 +144,12 @@ Examples:
 			route := bsb.BestElectronicRoute(offers)
 
 			res := bsb.BorrowResult{MMS: doc.MMS(), Title: doc.Title(), DryRun: dryRun || !yes,
-				Electronic: offers, Route: route, ElectronicError: edErr}
+				Electronic: offers, Route: route, ElectronicError: edErr, LoggedIn: loggedIn}
 			if route != nil {
 				res.Action = route.Action
+			}
+			if bsb.LoginHintNeeded(offers, loggedIn) {
+				res.LoginHint = bsb.LoginHint
 			}
 
 			// --- readonly best-offer probe (ngrs) ---
@@ -173,19 +182,30 @@ Examples:
 					}
 					return nil
 				case bsb.ActionRequestPhysical:
-					// licensed, but no access for this user: print the
-					// entitlement and fall through to the physical chain.
-					printDeniedElectronic(doc, res, route, loggedIn)
+					// Licensed, but no access for this user. Anonymous checks
+					// systematically underestimate access, so stop here and
+					// demand login instead of falling into the (login-gated)
+					// physical chain with a misleading "requires login" error.
+					if err := emitLoginRequired(doc, res, route); err != nil {
+						return err
+					}
+					return nil
 				}
 			}
 
 			// --- physical / resource-sharing request chain (login required) ---
 			// Without --yes this is strictly readonly (preview = --dry-run).
-			// Reachable for records without online offers (route == nil) and for
-			// licensed-but-denied records via the request-physical fallback.
+			// Reachable for records without online offers (route == nil);
+			// licensed-but-denied records stopped above at emitLoginRequired
+			// (anonymous) or fall here only when already logged in.
 			// Download routes skip the chain entirely (free downloads need no
 			// login); browser/portal routes already returned above.
-			if route == nil || route.Action == bsb.ActionRequestPhysical {
+			if route == nil || (route.Action == bsb.ActionRequestPhysical && loggedIn) {
+				// Logged-in licensed-but-denied: the physical fallback is
+				// genuine — say so before the chain preview.
+				if route != nil {
+					printDeniedElectronic(doc, res, route)
+				}
 				chain, err := bsb.AssembleRequestChain(client, doc, pickup, note, flagLang)
 				if err != nil {
 					if flagJSON {
@@ -199,12 +219,7 @@ Examples:
 					res.Message = chain.Preview
 					res.Detail = chain.Detail
 					if flagJSON {
-						return printJSON(map[string]any{
-							"mms": doc.MMS(), "title": doc.Title(), "mode": "request",
-							"dry_run": true, "request_path": chain.Path,
-							"message": chain.Preview, "form": chain.Form,
-							"payload": chain.Payload, "detail": chain.Detail,
-						})
+						return printJSON(res.WithRequestPreview(chain))
 					}
 					fmt.Println(chain.Preview)
 					fmt.Println("\nRe-run with --yes (+ login) to place this request for real.")
@@ -379,30 +394,57 @@ func emitSearchInPortal(doc *bsb.Doc, res bsb.BorrowResult, route *bsb.Electroni
 	return nil
 }
 
-// printDeniedElectronic informs about licensed-but-denied offers before the
-// physical chain preview takes over.
-func printDeniedElectronic(doc *bsb.Doc, res bsb.BorrowResult, route *bsb.ElectronicOffer, loggedIn bool) {
+// emitLoginRequired stops anonymous licensed-but-denied borrows with an
+// actionable login demand (JSON: login_hint + entitlement offers) instead
+// of falling into the physical chain. Logged-in denied records never reach
+// here — for them the physical fallback below is genuine.
+func emitLoginRequired(doc *bsb.Doc, res bsb.BorrowResult, route *bsb.ElectronicOffer) error {
+	res.Mode = "login-required"
+	res.DryRun = true
+	res.LoginHint = bsb.LoginHint
+	res.Message = fmt.Sprintf("licensed electronic access denied for anonymous check (package: %s) — log in and retry before ordering physically: `librarian auth login`, then `librarian borrow --mms %s`", route.Platform, doc.MMS())
 	if flagJSON {
-		return // the JSON error envelope carries action + electronic offers
+		return printJSON(res)
 	}
-	fmt.Printf("Licensed electronic access denied (package: %s).\n", route.Platform)
-	if !loggedIn {
-		fmt.Println("Hint: `librarian auth login` may unlock entitlements — the check above ran anonymously.")
+	fmt.Println(res.Message)
+	fmt.Printf("Record: %s (MMS %s)\n", doc.Title(), doc.MMS())
+	fmt.Printf("Hint: %s\n", bsb.LoginHint)
+	return nil
+}
+
+// printDeniedElectronic informs about licensed-but-denied offers for
+// logged-in users, right before the genuine physical-chain fallback.
+func printDeniedElectronic(doc *bsb.Doc, res bsb.BorrowResult, route *bsb.ElectronicOffer) {
+	if flagJSON {
+		return // the JSON envelope carries action + electronic offers
 	}
+	fmt.Printf("Licensed electronic access denied even when logged in (package: %s).\n", route.Platform)
 	fmt.Println("Falling back to the physical / resource-sharing chain:")
 }
 
 // newRequestErrorJSON builds the machine-readable error envelope for a
-// failed request-chain assembly: route action, entitlement offers and the
-// request path stay visible so agents can react (e.g. login, then retry).
+// failed request-chain assembly: route action, login state, entitlement
+// offers and the request path stay visible so agents can react (e.g. login,
+// then retry).
 func newRequestErrorJSON(doc *bsb.Doc, res bsb.BorrowResult, requestPath string, err error) map[string]any {
-	return map[string]any{
+	res.Mode = "request"
+	res.DryRun = true
+	res.RequestPath = requestPath
+	out := map[string]any{
 		"mms": doc.MMS(), "title": doc.Title(),
-		"mode": "request", "dry_run": true,
-		"action": res.Action, "electronic": res.Electronic,
+		"mode": res.Mode, "dry_run": true,
+		"action": res.Action, "logged_in": res.LoggedIn,
+		"electronic":       res.Electronic,
 		"electronic_route": res.Route, "request_path": requestPath,
 		"error": err.Error(),
 	}
+	if res.LoginHint != "" {
+		out["login_hint"] = res.LoginHint
+	}
+	if res.ElectronicError != "" {
+		out["electronic_error"] = res.ElectronicError
+	}
+	return out
 }
 
 // chainPathOf classifies the record without running the (login-gated) chain.

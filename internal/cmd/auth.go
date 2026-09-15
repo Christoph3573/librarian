@@ -29,9 +29,18 @@ dir (mode 0600) and reused by research/inspect/borrow.
 Credential sources (in order): --user/--password flags, BSB_USER/BSB_PASSWORD
 env vars (also read from --env-file, e.g. a .env file), interactive prompt.
 
-AGENT HINT: call 'librarian auth <subcommand> --help' to see flags. Searching
-(research) also works anonymously without login; login is required for
-request options, loans/requests and restricted downloads.`,
+AGENT HINT: call 'librarian auth <subcommand> --help' to see flags.
+Login unlocks what anonymous/guest mode underestimates or blocks:
+  - edelivery hasAccess becomes user-aware (anonymous hasAccess=false often
+    turns into an open-browser license after login — always log in before
+    inspect/borrow on Alma-E/Viewit records)
+  - titleServices request options with allowed=Y/N (order/loan/document
+    delivery) and inspect --detail (holdings summaries, copy statements)
+  - placing OVP/NGRS requests (borrow --yes), cancelling (borrow --cancel)
+    and the account overview (auth status: loans/holds/bookings)
+Rule of thumb: for Alma-E records check 'auth status --json' first; if not
+logged in, log in and re-run inspect before ordering anything physically.
+Searching (research) also works anonymously without login.`,
 	}
 	cmd.AddCommand(newAuthLoginCmd())
 	cmd.AddCommand(newAuthStatusCmd())

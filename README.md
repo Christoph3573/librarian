@@ -16,7 +16,9 @@ go build -o librarian .
 ## Workflow
 
 ```bash
-librarian auth --help        # 1. log in (or stay anonymous for search)
+librarian auth --help        # 1. log in FIRST: unlocks entitlements (hasAccess),
+                             #    request options and ordering; anonymous e-license
+                             #    checks underestimate access
 librarian research --help    # 2. search for books, list media
 librarian inspect --help     # 3. formats + availability of one record
 librarian borrow --help      # 4. download digital media / request physical
@@ -30,8 +32,8 @@ librarian borrow --help      # 4. download digital media / request physical
 | `auth status` | optional | verify session, show loans/holds/bookings counts |
 | `auth logout` | — | delete saved session |
 | `research <query>` | anonymous OK | catalog search (title, MMS-ID, types); `--field title\|creator\|…`, `--delivery` for availability, `--include/--exclude rtype:books` facet filters, `--facets` for aggregation buckets + highlights |
-| `inspect --mms <id>` | anonymous OK, richer logged in | holdings, online links, titleServices request options, `request_path` (ovp/ngrs/electronic-open/electronic-licensed) + `physical_service_id`; `electronic` offers (kind, hasAccess, resolver/direct URL, action) + `electronic_route` (best legal path); `--detail` uses the physicalServiceId level |
-| `borrow --mms <id>` | anonymous OK for open scans, login improves licensed checks + required for requests | entitlement router: free MDZ/IIIF downloads to `--out-dir`; licensed-entitled → `open-browser` URL (SSO in browser, `--open` launches it); portal links → `search-in-portal` hint (no download attempt); licensed-but-denied → `request-physical` fallback; physical/fernleihe chain preview by default (readonly); `--offer physical\|digital\|eBook` = readonly NGRS best-offer; real request only with `--yes` (login required); `--pickup/--note`; `--cancel <id> --yes` cancels |
+| `inspect --mms <id>` | anonymous OK, richer logged in | holdings, online links, titleServices request options, `request_path` (ovp/ngrs/electronic-open/electronic-licensed) + `physical_service_id`; `electronic` offers (kind, hasAccess, resolver/direct URL, action) + `electronic_route` (best legal path); anonymous licensed-but-denied checks carry `login_hint` (log in + retry — anonymous hasAccess=false underestimates access); `--detail` uses the physicalServiceId level |
+| `borrow --mms <id>` | anonymous OK for open scans, login improves licensed checks + required for requests | entitlement router: free MDZ/IIIF downloads to `--out-dir`; licensed-entitled → `open-browser` URL (SSO in browser, `--open` launches it); portal links → `search-in-portal` hint (no download attempt); anonymous licensed-but-denied → `login-required` stop (no silent physical fallback; `login_hint` in JSON); logged-in denied → genuine `request-physical` fallback into the physical/fernleihe chain preview (readonly by default); `--offer physical\|digital\|eBook` = readonly NGRS best-offer; real request only with `--yes` (login required); `--pickup/--note`; `--cancel <id> --yes` cancels |
 
 ## Tech notes
 

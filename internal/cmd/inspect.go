@@ -32,6 +32,11 @@ For one MMS-ID this shows:
 AGENT HINT: run 'librarian inspect --help' first. Get the MMS-ID from
 'librarian research --json'. Prefer --json. Use --detail for journals and
 multi-volume works where the plain holdings list is not enough.
+For Alma-E/Viewit records: log in BEFORE inspect — the anonymous edelivery
+check underestimates access (hasAccess=false anonymously often becomes an
+entitled open-browser license after login). If 'logged_in' is false and a
+licensed offer shows has_access=false, the output carries a login_hint:
+run 'auth status --json', then 'auth login', then re-run inspect.
 
 Examples:
   librarian inspect --mms 991032822189707356
@@ -115,6 +120,9 @@ Examples:
 				if edErr != "" {
 					out["electronic_error"] = edErr
 				}
+				if bsb.LoginHintNeeded(electronic, loggedIn) {
+					out["login_hint"] = bsb.LoginHint
+				}
 				if detailSvc != nil {
 					out["detail"] = detailSvc
 				}
@@ -142,7 +150,7 @@ Examples:
 			}
 			printHoldings(doc)
 			printOnline(doc)
-			printElectronic(client, doc)
+			printElectronic(client, doc, loggedIn)
 			if services != nil {
 				fmt.Printf("\nRequest options (logged in):\n")
 				for _, s := range services.Services {
@@ -201,7 +209,7 @@ func printOnline(doc *bsb.Doc) {
 
 // printElectronic renders the entitlement-router offers: classified PNX
 // links plus authoritative edelivery access flags (Alma-E records).
-func printElectronic(client *bsb.Client, doc *bsb.Doc) {
+func printElectronic(client *bsb.Client, doc *bsb.Doc, loggedIn bool) {
 	offers, edErr := bsb.ResolveElectronic(client, doc)
 	if len(offers) == 0 {
 		return
@@ -230,6 +238,9 @@ func printElectronic(client *bsb.Client, doc *bsb.Doc) {
 	}
 	if edErr != "" {
 		fmt.Printf("  (entitlement check failed: %s — PNX classification only)\n", edErr)
+	}
+	if bsb.LoginHintNeeded(offers, loggedIn) {
+		fmt.Printf("  login hint: %s\n", bsb.LoginHint)
 	}
 }
 
