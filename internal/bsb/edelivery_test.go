@@ -123,3 +123,39 @@ func TestElectronicAccessLicensedOffer(t *testing.T) {
 		t.Fatalf("hasAccess must be present and false")
 	}
 }
+
+func TestLoginHintNeeded(t *testing.T) {
+	no := false
+	denied := []ElectronicOffer{
+		{Platform: "Ebook Central", Kind: string(KindLicensedService), HasAccess: &no, Action: ActionRequestPhysical},
+	}
+	if !LoginHintNeeded(denied, false) {
+		t.Fatalf("anonymous denied licensed offer must need the login hint")
+	}
+	if LoginHintNeeded(denied, true) {
+		t.Fatalf("logged-in check must not need the login hint")
+	}
+	portalOnly := []ElectronicOffer{
+		{Platform: "dbis", Kind: string(KindPackagePortal), Action: ActionSearchInPortal},
+	}
+	if LoginHintNeeded(portalOnly, false) {
+		t.Fatalf("portal-only offers must not need the login hint")
+	}
+	openOnly := []ElectronicOffer{
+		{Platform: "mdz", Kind: string(KindOpen), Action: ActionDownload},
+	}
+	if LoginHintNeeded(openOnly, false) {
+		t.Fatalf("open-only offers must not need the login hint")
+	}
+	// Licensed offer without entitlement flag (PNX-only browser link) is
+	// not a denied check — no hint.
+	unflagged := []ElectronicOffer{
+		{Platform: "x", Kind: string(KindLicensedService), Action: ActionOpenBrowser},
+	}
+	if LoginHintNeeded(unflagged, false) {
+		t.Fatalf("offer without hasAccess flag must not need the login hint")
+	}
+	if LoginHint == "" {
+		t.Fatalf("LoginHint must be a non-empty retry instruction")
+	}
+}

@@ -225,6 +225,27 @@ const (
 	ActionNone            = "none"
 )
 
+// LoginHint is the machine-readable retry instruction attached to inspect
+// and borrow output whenever the entitlement check ran anonymously and
+// found licensed-but-denied offers. An anonymous hasAccess=false
+// systematically underestimates access: after login the same record may
+// route to open-browser instead of request-physical.
+const LoginHint = "anonymous entitlement check underestimates access: run `librarian auth status --json`, then `librarian auth login`, then re-run inspect/borrow before ordering physically"
+
+// LoginHintNeeded reports whether offers contain licensed-but-denied
+// entries while the check ran without login.
+func LoginHintNeeded(offers []ElectronicOffer, loggedIn bool) bool {
+	if loggedIn {
+		return false
+	}
+	for _, o := range offers {
+		if o.Kind == string(KindLicensedService) && o.HasAccess != nil && !*o.HasAccess {
+			return true
+		}
+	}
+	return false
+}
+
 // ElectronicOffer is one access path for a title: where it lives, whether
 // this user may read it, and the best legal action to get there.
 type ElectronicOffer struct {

@@ -34,9 +34,31 @@ type BorrowResult struct {
 	// ElectronicError is set when the edelivery entitlement check failed;
 	// routing then fell back to PNX classification only.
 	ElectronicError string `json:"electronic_error,omitempty"`
+	// LoggedIn reports whether the entitlement check ran with a login JWT.
+	// Anonymous hasAccess=false underestimates access — see LoginHint.
+	LoggedIn bool `json:"logged_in"`
+	// LoginHint is set when the check ran anonymously and found
+	// licensed-but-denied offers: retry after `auth login` before
+	// ordering physically.
+	LoginHint string `json:"login_hint,omitempty"`
+	// RequestPath classifies the record (ovp/ngrs/electronic-*); set on
+	// request previews and errors so agents know which chain applies.
+	RequestPath string `json:"request_path,omitempty"`
+	// Form and Payload carry the assembled chain preview (readonly form
+	// reply and the exact submit body) for mode=request previews.
+	Form    map[string]any `json:"form,omitempty"`
+	Payload map[string]any `json:"payload,omitempty"`
 	// Detail holds the titleServices (+ svcId detail) output for
 	// physical requests when --detail was given.
 	Detail *TitleServices `json:"detail,omitempty"`
+}
+
+// WithRequestPreview attaches a readonly chain preview to a request result.
+func (r BorrowResult) WithRequestPreview(chain *RequestChain) BorrowResult {
+	r.RequestPath = chain.Path
+	r.Form = chain.Form
+	r.Payload = chain.Payload
+	return r
 }
 
 // MDZID extracts the MDZ object id (bsbXXXXXXXX) from an MDZ resolving URL.
