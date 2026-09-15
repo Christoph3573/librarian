@@ -1,0 +1,25 @@
+# Binaries
+/librarian
+librarian
+
+# Local API captures (HAR) — dev reference only, not for the repo
+/manuel requests/
+manuel requests/
+
+# Secrets — never commit real credentials (see .env.example)
+/.env
+.env.local
+*.env
+!.env.example
+
+# macOS / editors
+.DS_Store
+*.DS_Store
+.idea/
+.vscode/
+
+# Go
+*.test
+*.out
+coverage.txt
+dist/
