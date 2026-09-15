@@ -10,6 +10,12 @@ before first use. Global flags `--view/--lang/--json` work everywhere;
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/Christoph3573/librarian/main/install.sh | bash
+```
+
+Or manually:
+
+```bash
 go build -o librarian .
 ```
 
